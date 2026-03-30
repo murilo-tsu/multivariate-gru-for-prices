@@ -1,63 +1,66 @@
 # Multivariate GRU for Commodity Price Forecasting
 
-A lightweight deep learning pipeline for weekly commodity price forecasting, designed to work with **small datasets** (a few hundred observations) where conventional wisdom says "just use ARIMA."
+This repository contains a forecasting pipeline for weekly commodity prices using a Bidirectional GRU neural network. The dataset is small — a few hundred weekly observations — which is a scenario where deep learning models are generally not recommended due to overfitting risk. The purpose of this project was to test whether it is possible to make a recurrent neural network work under such constraints by directly restricting its architecture and carefully selecting input features.
 
-## The Premise
+## Context
 
-> "With limited data, use simple models."
-
-This project challenges that assumption. Instead of defaulting to classical statistical methods, the goal was to **stress-test a recurrent neural network** by carefully constraining its architecture and engineering the right inputs — making deep learning viable even when data is scarce. **This small project tackles the prediction of MOP using MAP as predictor**.
+It is common practice in time series forecasting to default to classical statistical models (such as ARIMA or Holt-Winters) when the available data is limited. Neural networks, particularly recurrent architectures, tend to require larger datasets to generalize well. This project takes a different approach: instead of avoiding deep learning altogether, the idea was to stress-test a GRU model by reducing its capacity to the minimum viable architecture and controlling overfitting primarily through epoch restriction either by early stopping or by finding out a cut-off epoch. 
 
 ## Architecture
 
-The model uses a **Bidirectional GRU** with a deliberately minimal footprint:
+The model is a Bidirectional GRU with a deliberately small number of units. The architecture can be summarized as follows:
 
-| Layer | Units | Details |
-|-------|-------|---------|
-| GRU | 8 | `leaky_relu`, return sequences |
-| Bidirectional GRU | 4 | `tanh`, L2 regularization (0.01) |
-| Dropout | — | 20% |
-| Dense | 1 | Linear output |
+| Layer | Units | Activation | Notes |
+|-------|-------|------------|-------|
+| GRU (Bidirectional) | 8 | leaky_relu | Returns sequences |
+| GRU (Bidirectional) | 4 | tanh | L2 regularization (0.01) |
+| Dropout | — | — | 20% |
+| Dense | 1 | linear | Output layer |
 
-**Total trainable parameters:** ~500 (depending on feature count)
+While L2 regularization and dropout are present in the architecture, the most effective mechanism to prevent overfitting was directly limiting the number of training epochs. This proved itself as a simple but effective approach for this particular dataset size.
 
-The small architecture is intentional — with limited data, every free parameter is a potential source of overfitting.
+## Feature Engineering
 
-## Key Design Decisions
+Rather than relying on the network to extract all relevant patterns from raw price data alone, the pipeline generates derived features from the series itself. These include rate of change, first differences, rolling z-scores, and trend indicators. The objective is to provide the model with richer input representations without introducing external domain knowledge — all features are computed from the price series and, optionally, from a correlated exogenous variable.
 
-**Epoch control over regularization** — While L2 and dropout are present in the architecture, the most effective lever against overfitting was directly restricting the number of training epochs. Simple, but it worked.
+## Post-Processing
 
-**Derived features over raw inputs** — Instead of feeding only raw prices, the pipeline generates features derived from the series itself: rate of change, first differences, rolling z-scores, and trend flags. This gives the network richer input representations without requiring external domain knowledge.
+The raw model output goes through two correction steps before being used for forecasting:
 
-**Post-processing corrections** — The pipeline applies bias correction and lag adjustment (via cross-correlation) to the raw predictions, significantly improving alignment with actual values.
+1. **Bias correction** — the systematic offset between predicted and actual values on the test set is estimated and subtracted from the forecast.
+2. **Lag adjustment** — cross-correlation is used to detect temporal misalignment between predictions and actuals. The forecast is then shifted accordingly.
 
-**Scenario analysis** — Forecasts are presented as probability distributions, with percentile-based scenarios (P10/P50/P90) to support decision-making under uncertainty.
+These corrections proved to be relevant, reducing the sMAPE from approximately 5.5% to 1.8% on the test set.
 
-## Pipeline Overview
+## Scenario Analysis
+
+Forecasts are presented not as single point estimates but as a probability distribution. Percentile-based scenarios (P10, P20, P50, P80, P90) are computed from the forecast distribution, which is useful for decision-making under uncertainty in procurement and supply chain planning.
+
+## Pipeline
+
+The general flow of the pipeline is as follows:
 
 ```
 Raw Data → Outlier Treatment (Winsorization)
          → Feature Engineering (RoC, diff, z-score, trend flags)
          → RobustScaler normalization
-         → TimeseriesGenerator (window = 4, batch = 48)
-         → GRU Training (300 epochs)
+         → TimeseriesGenerator (window = 12, batch = 48)
+         → GRU Training (EarlyStopping, ReduceLROnPlateau)
          → Bias Correction + Lag Adjustment
-         → 12-week Rolling Forecast
+         → Rolling Forecast (12-week horizon)
          → Probability Distribution (scenario analysis)
 ```
 
-## Results
+## Dependencies
 
-The model achieves a **sMAPE of ~1.8%** on the test set after bias and lag corrections, with stable convergence and no significant overfitting — train loss and validation loss converge together across ~300 epochs.
+The project uses Python 3.10+ with the following libraries: TensorFlow/Keras for the GRU model, scikit-learn for scaling and evaluation, scipy for cross-correlation and statistical distributions, pandas and numpy for data manipulation and matplotlib for visualization.
 
-## Tech Stack
+## Files
 
-- **Python 3.10+**
-- **TensorFlow / Keras** — GRU, Bidirectional, EarlyStopping, ReduceLROnPlateau
-- **scikit-learn** — RobustScaler/MinMaxScaler, train/test split
-- **scipy** — Cross-correlation for lag detection, statistical distributions
-- **pandas / numpy** — Data manipulation and feature engineering
-- **matplotlib** — Visualization
+| File | Description |
+|------|-------------|
+| `MultivaGRU.py` | Complete pipeline for training, evaluation and forecasting |
+| `Dados.xlsx` | Sample dataset |
 
 ## Usage
 
@@ -67,18 +70,11 @@ from MultivaGRU import forecast_cfr_prices
 forecast_cfr_prices(
     rawMaterial='MOP',
     dadosHistoricos=df,
-    horizonte=12,        # 12-week forecast horizon
-    ordem_n=True,        # Enable multivariate features
-    preditor='MAP'        # Optional: exogenous predictor variable
+    horizonte=12,
+    ordem_n=True,
+    preditor='MAP'
 )
 ```
-
-## Files
-
-| File | Description |
-|------|-------------|
-| `MultivaGRU.py` | Main pipeline — training, evaluation, and forecasting |
-| `Dados.xlsx` | Sample dataset |
 
 ## License
 
